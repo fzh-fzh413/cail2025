@@ -1,0 +1,309 @@
+# encoding=utf-8
+import ast
+import json
+import os
+import dashscope
+from dashscope import Generation
+from http import HTTPStatus
+import time
+import re
+from typing import Tuple, Optional
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)  # 允许跨域请求
+
+# 从 baseline.py 提取的核心函数
+def ask_llm(prompt, model="qwen3-235b-a22b-instruct-2507"):
+    if ("qwen3-235b-a22b-instruct-2507" == model):
+        return ask_tyqw_general(prompt, model)
+
+
+def ask_tyqw_general(prompt, model='qwen3-235b-a22b-instruct-2507'):
+    dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "sk-653bf07ab1aa466099d80a3a275afdb4")
+    if type(prompt) is str:
+        s_time = time.time()
+        response = Generation.call(model,
+                                   prompt=prompt,
+                                   )
+        e_time = time.time()
+
+        if response.status_code == HTTPStatus.OK:
+            used_time = e_time - s_time
+            input_tokens = response['usage'].input_tokens
+            output_tokens = response['usage'].output_tokens
+            token_infomration = {"used_time": used_time, "input_tokens": input_tokens, "output_tokens": output_tokens}
+            return response["output"]["text"], token_infomration
+        return None, {"used_time": None, "input_tokens": None, "output_tokens": None}
+
+    elif type(prompt) is list:
+        response = Generation.call(model,
+                                   messages=prompt,
+                                   result_format='message'  # 设置输出为'message'格式
+                                   )
+        if response.status_code == HTTPStatus.OK:
+            return response["output"]["choices"][0]["message"]["content"]
+        else:
+            return None
+
+
+def extract_response(text: str) -> Tuple[bool, Optional[dict]]:
+    """
+    从 LLM 返回文本中提取 JSON / Python 字典。
+    返回 (成功标志, dict 或 None)。
+    不使用 eval；优先尝试 json.loads，再尝试 ast.literal_eval。
+    如果解析失败，返回 (False, None)。
+    """
+    if not isinstance(text, str):
+        return False, None
+
+    # 1) 优先提取 ```json``` 或 ```python``` 代码块里的内容
+    code_block_pattern = r"```(?:json|python)?\s*(\{[\s\S]*?\})\s*```"
+    m = re.search(code_block_pattern, text, flags=re.IGNORECASE)
+    candidate = None
+    if m:
+        candidate = m.group(1)
+    else:
+        # 2) 如果没有代码块，尝试从第一对大括号提取最外层 {...}
+        m2 = re.search(r"(\{[\s\S]*\})", text)
+        if m2:
+            candidate = m2.group(1)
+        else:
+            candidate = text.strip()
+
+    # 清理常见噪声：去掉左右两侧的非打印字符
+    candidate = candidate.strip()
+
+    # 尝试 json.loads（严格且安全）
+    try:
+        parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return True, parsed
+        else:
+            # 如果顶层不是 dict，也接受并封装
+            return True, {"result": parsed}
+    except Exception:
+        pass
+
+    # 尝试 ast.literal_eval（支持 Python 字面量：单引号、None、True/False）
+    try:
+        parsed = ast.literal_eval(candidate)
+        if isinstance(parsed, dict):
+            return True, parsed
+        else:
+            return True, {"result": parsed}
+    except Exception:
+        pass
+
+    # 回退策略：尝试把单引号改为双引号再 json.loads（谨慎）
+    try:
+        temp = candidate
+        # 仅在包含单引号且不包含双引号时尝试
+        if ("'" in temp) and ('"' not in temp):
+            temp2 = temp.replace("'", '"')
+            parsed = json.loads(temp2)
+            if isinstance(parsed, dict):
+                return True, parsed
+            else:
+                return True, {"result": parsed}
+    except Exception:
+        pass
+
+    # 无法解析：记录原始文本供后续人工检查
+    return False, None
+
+
+prompt_template = """针对查询中涉及到的问题回答数值计算结果并给出依据的法律条款：
+{query}
+
+要求：
+1. 一步一步思考，最后给出答案（思路可写在 reasoning 字段）
+2. 最后返回一个**严格的 JSON**，只返回 JSON，不要多余自然语言，也不要包含占位符（例如 xx,..）
+格式示例：
+```json
+{{
+  "article_answer": ["《民法典》第123条", "《某法》第45条"],
+  "numerical_answer": [1234.56],
+  "reasoning": "这里写推理过程的简短摘要"
+}}
+```"""
+
+
+def process_query(query: str, model_name='qwen3-235b-a22b-instruct-2507'):
+    """
+    处理单个查询，返回 LLM 的原始响应
+    """
+    prompt = prompt_template.replace("{query}", query)
+    response, usage = ask_llm(prompt, model=model_name)
+    return response
+
+
+def process_single_query(query_data):
+    """
+    处理单个查询请求
+    返回处理结果字典
+    """
+    try:
+        if not isinstance(query_data, dict):
+            return {
+                "id": -1,
+                "reasoning_content": "请求格式错误：单个请求必须是 JSON 对象",
+                "numerical_answer": [],
+                "article_answer": []
+            }
+        
+        # 验证必需字段
+        if "id" not in query_data or "query" not in query_data:
+            query_id = query_data.get("id", -1)
+            return {
+                "id": query_id,
+                "reasoning_content": "请求必须包含 'id' 和 'query' 字段",
+                "numerical_answer": [],
+                "article_answer": []
+            }
+        
+        query_id = query_data["id"]
+        query = query_data["query"]
+        
+        # 处理查询
+        raw_response = process_query(query)
+        
+        if raw_response is None:
+            # LLM 调用失败，返回错误响应
+            return {
+                "id": query_id,
+                "reasoning_content": "模型调用失败",
+                "numerical_answer": [],
+                "article_answer": []
+            }
+        
+        # 提取结构化响应
+        success, extracted = extract_response(raw_response)
+        
+        if success and extracted is not None:
+            # 确保必要的字段存在
+            result = {
+                "id": query_id,
+                "reasoning_content": raw_response,  # 完整的推理内容
+                "numerical_answer": extracted.get("numerical_answer", []),
+                "article_answer": extracted.get("article_answer", [])
+            }
+        else:
+            # 解析失败，使用兜底结构
+            result = {
+                "id": query_id,
+                "reasoning_content": raw_response,
+                "numerical_answer": [],
+                "article_answer": []
+            }
+        
+        return result
+        
+    except Exception as e:
+        # 捕获异常，返回错误信息
+        query_id = query_data.get("id", -1) if isinstance(query_data, dict) else -1
+        return {
+            "id": query_id,
+            "reasoning_content": f"处理错误: {str(e)}",
+            "numerical_answer": [],
+            "article_answer": []
+        }
+
+
+@app.route('/model', methods=['POST'])
+def model_inference():
+    """
+    API 端点：处理法律问题查询
+    请求格式: 
+    - 单个对象: {"id": 0, "query": "问题"}
+    - 批量请求: [{"id": 0, "query": "问题1"}, {"id": 1, "query": "问题2"}]
+    响应格式: 
+    - 单个响应: {"id": 0, "reasoning_content": "...", "numerical_answer": [...], "article_answer": [...]}
+    - 批量响应: [{...}, {...}]
+    """
+    try:
+        # 获取请求数据
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "id": -1,
+                "reasoning_content": "请求体不能为空",
+                "numerical_answer": [],
+                "article_answer": []
+            }), 200
+        
+        # 如果是列表，批量处理
+        if isinstance(data, list):
+            if len(data) == 0:
+                return jsonify([]), 200
+            
+            results = []
+            for item in data:
+                result = process_single_query(item)
+                results.append(result)
+            
+            return jsonify(results), 200
+        
+        # 单个对象处理
+        result = process_single_query(data)
+        return jsonify(result), 200
+        
+    except Exception as e:
+        # 捕获所有异常，返回错误信息
+        try:
+            if 'data' in locals() and isinstance(data, dict):
+                query_id = data.get("id", -1)
+            else:
+                query_id = -1
+        except:
+            query_id = -1
+            
+        error_response = {
+            "id": query_id,
+            "reasoning_content": f"处理错误: {str(e)}",
+            "numerical_answer": [],
+            "article_answer": []
+        }
+        return jsonify(error_response), 200
+
+
+@app.route('/', methods=['GET'])
+def index():
+    """根路径，返回 API 使用说明"""
+    return jsonify({
+        "message": "法律AI比赛 API 服务",
+        "endpoints": {
+            "POST /model": "处理法律问题查询",
+            "GET /health": "健康检查"
+        },
+        "usage": {
+            "url": "/model",
+            "method": "POST",
+            "request_format": {
+                "id": 0,
+                "query": "问题内容"
+            },
+            "response_format": {
+                "id": 0,
+                "reasoning_content": "推理过程",
+                "numerical_answer": [123456],
+                "article_answer": ["法律条文"]
+            }
+        }
+    }), 200
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """健康检查端点"""
+    return jsonify({"status": "healthy"}), 200
+
+
+if __name__ == '__main__':
+    # 可以在环境变量中设置端口，默认 5000
+    port = int(os.getenv("PORT", 5000))
+    host = os.getenv("HOST", "0.0.0.0")
+    app.run(host=host, port=port, debug=False)
+

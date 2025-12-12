@@ -1,0 +1,24 @@
+# Systemd 服务文件示例
+# 保存到 /etc/systemd/system/api-service.service
+# 然后运行: sudo systemctl daemon-reload && sudo systemctl enable api-service && sudo systemctl start api-service
+
+[Unit]
+Description=Legal AI API Service
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/api-service
+Environment="PATH=/opt/api-service/venv/bin"
+Environment="DASHSCOPE_API_KEY=your-api-key-here"
+ExecStart=/opt/api-service/venv/bin/gunicorn -w 4 -b 127.0.0.1:8000 app:app
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+
