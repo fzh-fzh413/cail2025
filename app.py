@@ -293,9 +293,11 @@ def process_single_query(query_data):
         
         if success and extracted is not None:
             # 确保必要的字段存在
+            # 优先使用提取的 JSON 中的 reasoning 字段，如果没有则使用 raw_response
+            reasoning_content = extracted.get("reasoning", raw_response)
             result = {
                 "id": query_id,
-                "reasoning_content": raw_response,  # 完整的推理内容
+                "reasoning_content": reasoning_content,
                 "numerical_answer": extracted.get("numerical_answer", []),
                 "article_answer": extracted.get("article_answer", [])
             }
