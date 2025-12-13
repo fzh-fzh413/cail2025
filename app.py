@@ -358,7 +358,7 @@ def model_inference():
                 return jsonify([]), 200
             
             # 限制批量请求大小，避免超时
-            MAX_BATCH_SIZE = 100  # 最大批量大小
+            MAX_BATCH_SIZE = 10000000000000000000000000000000  # 最大批量大小
             if len(data) > MAX_BATCH_SIZE:
                 return jsonify({
                     "id": -1,
