@@ -9,6 +9,7 @@ import time
 import re
 import signal
 from typing import Tuple, Optional
+from collections import OrderedDict
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -19,32 +20,32 @@ CORS(app)  # 允许跨域请求
 @app.errorhandler(500)
 def internal_error(error):
     """处理 500 内部服务器错误，返回 JSON 格式"""
-    return jsonify({
-        "id": -1,
-        "reasoning_content": f"服务器内部错误: {str(error)}",
-        "numerical_answer": [],
-        "article_answer": []
-    }), 200
+    return jsonify(OrderedDict([
+        ("id", -1),
+        ("reasoning_content", f"服务器内部错误: {str(error)}"),
+        ("numerical_answer", []),
+        ("article_answer", [])
+    ])), 200
 
 @app.errorhandler(404)
 def not_found(error):
     """处理 404 错误，返回 JSON 格式"""
-    return jsonify({
-        "id": -1,
-        "reasoning_content": "接口不存在",
-        "numerical_answer": [],
-        "article_answer": []
-    }), 200
+    return jsonify(OrderedDict([
+        ("id", -1),
+        ("reasoning_content", "接口不存在"),
+        ("numerical_answer", []),
+        ("article_answer", [])
+    ])), 200
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     """处理所有未捕获的异常，返回 JSON 格式"""
-    return jsonify({
-        "id": -1,
-        "reasoning_content": f"处理异常: {str(e)}",
-        "numerical_answer": [],
-        "article_answer": []
-    }), 200
+    return jsonify(OrderedDict([
+        ("id", -1),
+        ("reasoning_content", f"处理异常: {str(e)}"),
+        ("numerical_answer", []),
+        ("article_answer", [])
+    ])), 200
 
 # 从 baseline.py 提取的核心函数
 def ask_llm(prompt, model="qwen3-235b-a22b-instruct-2507", timeout=120):
@@ -220,34 +221,34 @@ def process_single_query(query_data):
     """
     try:
         if not isinstance(query_data, dict):
-            return {
-                "id": -1,
-                "reasoning_content": "请求格式错误：单个请求必须是 JSON 对象",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            return OrderedDict([
+                ("id", -1),
+                ("reasoning_content", "请求格式错误：单个请求必须是 JSON 对象"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         
         # 验证必需字段
         if "id" not in query_data or "query" not in query_data:
             query_id = query_data.get("id", -1)
-            return {
-                "id": query_id,
-                "reasoning_content": "请求必须包含 'id' 和 'query' 字段",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            return OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", "请求必须包含 'id' 和 'query' 字段"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         
         query_id = query_data["id"]
         query = query_data["query"]
         
         # 验证 query 不为空
         if not query or not isinstance(query, str) or len(query.strip()) == 0:
-            return {
-                "id": query_id,
-                "reasoning_content": "查询内容不能为空",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            return OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", "查询内容不能为空"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         
         # 处理查询，添加异常捕获和超时处理
         try:
@@ -256,59 +257,68 @@ def process_single_query(query_data):
             query_timeout = 120  # 默认 120 秒
             raw_response = process_query(query, timeout=query_timeout)
         except TimeoutError as e:
-            return {
-                "id": query_id,
-                "reasoning_content": f"模型调用超时: {str(e)}",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            return OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", f"模型调用超时: {str(e)}"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         except Exception as e:
-            return {
-                "id": query_id,
-                "reasoning_content": f"模型调用异常: {str(e)}",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            return OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", f"模型调用异常: {str(e)}"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         
         if raw_response is None:
             # LLM 调用失败，返回错误响应
-            return {
-                "id": query_id,
-                "reasoning_content": "模型调用失败，返回为空",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            return OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", "模型调用失败，返回为空"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         
         # 提取结构化响应
         try:
             success, extracted = extract_response(raw_response)
         except Exception as e:
             # 提取失败，返回原始响应
-            return {
-                "id": query_id,
-                "reasoning_content": raw_response if raw_response else f"响应提取失败: {str(e)}",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            return OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", raw_response if raw_response else f"响应提取失败: {str(e)}"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         
         if success and extracted is not None:
-            # 确保必要的字段存在
+            # 确保必要的字段存在，按照标准格式顺序：id, reasoning_content, numerical_answer, article_answer
             # 优先使用提取的 JSON 中的 reasoning 字段，如果没有则使用 raw_response
             reasoning_content = extracted.get("reasoning", raw_response)
-            result = {
-                "id": query_id,
-                "reasoning_content": reasoning_content,
-                "numerical_answer": extracted.get("numerical_answer", []),
-                "article_answer": extracted.get("article_answer", [])
-            }
+            # 确保 numerical_answer 和 article_answer 是列表类型
+            numerical_answer = extracted.get("numerical_answer", [])
+            if not isinstance(numerical_answer, list):
+                numerical_answer = [numerical_answer] if numerical_answer is not None else []
+            article_answer = extracted.get("article_answer", [])
+            if not isinstance(article_answer, list):
+                article_answer = [article_answer] if article_answer is not None else []
+            
+            # 使用 OrderedDict 确保字段顺序：id, reasoning_content, numerical_answer, article_answer
+            result = OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", reasoning_content),
+                ("numerical_answer", numerical_answer),
+                ("article_answer", article_answer)
+            ])
         else:
             # 解析失败，使用兜底结构
-            result = {
-                "id": query_id,
-                "reasoning_content": raw_response if raw_response else "无法解析模型响应",
-                "numerical_answer": [],
-                "article_answer": []
-            }
+            result = OrderedDict([
+                ("id", query_id),
+                ("reasoning_content", raw_response if raw_response else "无法解析模型响应"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])
         
         return result
         
@@ -317,12 +327,12 @@ def process_single_query(query_data):
         import traceback
         app.logger.error(f"process_single_query 异常: {str(e)}\n{traceback.format_exc()}")
         query_id = query_data.get("id", -1) if isinstance(query_data, dict) else -1
-        return {
-            "id": query_id,
-            "reasoning_content": f"处理错误: {str(e)}",
-            "numerical_answer": [],
-            "article_answer": []
-        }
+        return OrderedDict([
+            ("id", query_id),
+            ("reasoning_content", f"处理错误: {str(e)}"),
+            ("numerical_answer", []),
+            ("article_answer", [])
+        ])
 
 
 @app.route('/model', methods=['POST'])
@@ -341,12 +351,12 @@ def model_inference():
         data = request.get_json()
         
         if not data:
-            return jsonify({
-                "id": -1,
-                "reasoning_content": "请求体不能为空",
-                "numerical_answer": [],
-                "article_answer": []
-            }), 200
+            return jsonify(OrderedDict([
+                ("id", -1),
+                ("reasoning_content", "请求体不能为空"),
+                ("numerical_answer", []),
+                ("article_answer", [])
+            ])), 200
         
         # 记录请求信息（用于调试）
         if isinstance(data, list):
@@ -362,12 +372,12 @@ def model_inference():
             # 限制批量请求大小，避免超时
             MAX_BATCH_SIZE = 10000000000000000000000000000000  # 最大批量大小
             if len(data) > MAX_BATCH_SIZE:
-                return jsonify({
-                    "id": -1,
-                    "reasoning_content": f"批量请求过大（{len(data)} 条），最多支持 {MAX_BATCH_SIZE} 条。请分批发送请求。",
-                    "numerical_answer": [],
-                    "article_answer": []
-                }), 200
+                return jsonify(OrderedDict([
+                    ("id", -1),
+                    ("reasoning_content", f"批量请求过大（{len(data)} 条），最多支持 {MAX_BATCH_SIZE} 条。请分批发送请求。"),
+                    ("numerical_answer", []),
+                    ("article_answer", [])
+                ])), 200
             
             results = []
             # 批量处理，每个请求单独处理，避免一个失败影响全部
@@ -383,12 +393,12 @@ def model_inference():
                     # 单个请求失败，返回错误响应但继续处理其他请求
                     app.logger.error(f"处理第 {idx + 1} 条请求时出错: {str(e)}")
                     query_id = item.get("id", idx) if isinstance(item, dict) else idx
-                    error_result = {
-                        "id": query_id,
-                        "reasoning_content": f"处理错误: {str(e)}",
-                        "numerical_answer": [],
-                        "article_answer": []
-                    }
+                    error_result = OrderedDict([
+                        ("id", query_id),
+                        ("reasoning_content", f"处理错误: {str(e)}"),
+                        ("numerical_answer", []),
+                        ("article_answer", [])
+                    ])
                     results.append(error_result)
             
             app.logger.info(f"批量处理完成，共处理 {len(results)} 条")
@@ -412,12 +422,12 @@ def model_inference():
                     error_results = []
                     for idx, item in enumerate(data):
                         query_id = item.get("id", idx) if isinstance(item, dict) else idx
-                        error_results.append({
-                            "id": query_id,
-                            "reasoning_content": f"批量处理错误: {error_msg}",
-                            "numerical_answer": [],
-                            "article_answer": []
-                        })
+                        error_results.append(OrderedDict([
+                            ("id", query_id),
+                            ("reasoning_content", f"批量处理错误: {error_msg}"),
+                            ("numerical_answer", []),
+                            ("article_answer", [])
+                        ]))
                     return jsonify(error_results), 200
                 elif isinstance(data, dict):
                     query_id = data.get("id", -1)
@@ -428,12 +438,12 @@ def model_inference():
         except:
             query_id = -1
             
-        error_response = {
-            "id": query_id,
-            "reasoning_content": f"处理错误: {error_msg}",
-            "numerical_answer": [],
-            "article_answer": []
-        }
+        error_response = OrderedDict([
+            ("id", query_id),
+            ("reasoning_content", f"处理错误: {error_msg}"),
+            ("numerical_answer", []),
+            ("article_answer", [])
+        ])
         return jsonify(error_response), 200
 
 
